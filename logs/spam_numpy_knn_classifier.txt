@@ -1,0 +1,114 @@
+Timer unit: 1e-06 s
+
+Total time: 0 s
+File: /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py
+Function: distance at line 7
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+     7                                           @profile
+     8                                           def distance(point1: list[str], point2: list[str]): 
+     9                                               dis_squ = 0
+    10                                               for i in range(len(point1)): 
+    11                                                   dis_diff = float(point1[i]) - float(point2[i])
+    12                                                   diff_squ = dis_diff * dis_diff
+    13                                                   dis_squ += diff_squ
+    14                                               return dis_squ
+
+Total time: 0.000529 s
+File: /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py
+Function: read_config at line 31
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    31                                           @profile
+    32                                           def read_config(file):
+    33         1         41.0     41.0      7.8     filepath = os.path.abspath(f'{file}.yaml')
+    34         1         38.0     38.0      7.2     with open(filepath, 'r') as stream:
+    35         1        450.0    450.0     85.1        kwargs = yaml.safe_load(stream)
+    36         1          0.0      0.0      0.0     return kwargs
+
+Total time: 0.003085 s
+File: /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py
+Function: majority_vote at line 24
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    24                                           @profile
+    25                                           def majority_vote(neighbors: list[str]): 
+    26       921       1764.0      1.9     57.2      neighbor_count = dict((x,neighbors.count(x)) for x in set(neighbors))
+    27       921        916.0      1.0     29.7      neighbor_sorted = dict(sorted(neighbor_count.items(), key=lambda item: item[1], reverse=True))
+    28       921        310.0      0.3     10.0      majority = neighbor_sorted.popitem()[0]
+    29       921         95.0      0.1      3.1      return majority
+
+Total time: 0.009857 s
+File: /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py
+Function: read_file at line 38
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    38                                           @profile
+    39                                           def read_file(file): 
+    40         1         23.0     23.0      0.2      with open(file, mode ='r') as file:
+    41         1          2.0      2.0      0.0          csvFile = csv.reader(file)
+    42         1       9832.0   9832.0     99.7          data = [line for line in csvFile]
+    43         1          0.0      0.0      0.0      return data
+
+Total time: 51.2589 s
+File: /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py
+Function: distance_numpy at line 16
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    16                                           @profile
+    17                                           def distance_numpy(point1: list[str], point2: list[str]): 
+    18   3389280   23556160.0      7.0     46.0      arr1 = np.array([float(a) for a in point1])
+    19   3389280   22171529.0      6.5     43.3      arr2 = np.array([float(b) for b in point2])
+    20   3389280    2196501.0      0.6      4.3      dis_squ = (arr1 - arr2) ** 2
+    21   3389280    2967227.0      0.9      5.8      dis_squ_sum = dis_squ.sum()
+    22   3389280     367475.0      0.1      0.7      return dis_squ_sum
+
+Total time: 59.2458 s
+File: /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/classifier.py
+Function: _get_k_nearest_neighbors at line 11
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    11                                               @profile
+    12                                               def _get_k_nearest_neighbors(self, X: list[list[str]], y: list[str], x: list[str]):
+    13       921        175.0      0.2      0.0          dist_dic = dict()
+    14   3390201     360415.0      0.1      0.6          for i in range(len(X)): 
+    15   3389280     386852.0      0.1      0.7              if self.backend == 'plain': 
+    16                                                           dist = utils.distance(X[i], x)
+    17   3389280     348661.0      0.1      0.6              elif self.backend == 'numpy': 
+    18   3389280   56544139.0     16.7     95.4                  dist = utils.distance_numpy(X[i], x)
+    19                                                       else: 
+    20                                                           ValueError("'backend' must be set to 'plain' or 'numpy'")
+    21   3389280     716492.0      0.2      1.2              dist_dic[i] = (float(dist), y[i])
+    22       921     743529.0    807.3      1.3          dist_dic_sorted = dict(sorted(dist_dic.items(), key=lambda item: item[1][0]))
+    23       921     144317.0    156.7      0.2          nn_list = list(dist_dic_sorted.items())[:self.k]
+    24       921       1119.0      1.2      0.0          nn = [i[1][1] for i in nn_list]
+    25       921        108.0      0.1      0.0          return nn
+
+Total time: 60.919 s
+File: /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/classifier.py
+Function: __call__ at line 27
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    27                                               @profile
+    28                                               def __call__(self, data: tuple, newPoints: list[list[str]]):
+    29         1          0.0      0.0      0.0          result = list()
+    30       922        141.0      0.2      0.0          for i in newPoints: 
+    31       921   60913697.0  66138.7    100.0              nn = self._get_k_nearest_neighbors(data[0], data[1], i)
+    32       921       4859.0      5.3      0.0              major = utils.majority_vote(nn)
+    33       921        265.0      0.3      0.0              result.append(major)
+    34         1          0.0      0.0      0.0          return result
+
+  0.00 seconds - /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py:7 - distance
+  0.00 seconds - /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py:31 - read_config
+  0.00 seconds - /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py:24 - majority_vote
+  0.01 seconds - /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py:38 - read_file
+ 51.26 seconds - /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/utils.py:16 - distance_numpy
+ 59.25 seconds - /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/classifier.py:11 - _get_k_nearest_neighbors
+ 60.92 seconds - /Users/WilliamLiu/ADSAI/04_phdInUniTs/04_courses/developmentToolsForScientificComputing/devtools_scicomp_project_2025/src/pyclassify/classifier.py:27 - __call__

@@ -1,19 +1,15 @@
 from pyclassify.utils import read_config
+from pyclassify.utils import read_file
 from pyclassify.classifier import kNN
 import random
-import csv
 
-kwargs = read_config('experiments/config')
+kwargs = read_config('experiments/config_spambase')
 
-k = kwargs['k']
+k = int(kwargs['k'])
 dataset = kwargs['dataset']
+backend = kwargs['backend']
 
-data = []
-
-with open(dataset, mode ='r')as file:
-  csvFile = csv.reader(file)
-  for line in csvFile:
-        data.append(line)
+data = read_file(dataset)
 
 train_rate = int(0.8 * len(data))
 
@@ -36,7 +32,7 @@ for i in test_data:
     test_points.append(i[:-1])
     test_labels.append(i[-1])
 
-model = kNN(5)
+model = kNN(k, backend)
 pred_labels = model((train_points, train_labels), test_points)
 accuracy = len([test_labels[i] for i in range(0, len(test_labels)) if test_labels[i] == pred_labels[i]]) / len(test_labels)
 
