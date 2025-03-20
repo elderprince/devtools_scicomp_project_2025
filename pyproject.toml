@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "pyclassify"
+name = "attentions"
 version = "0.0.1"
-description = "INSERT"
+description = "This project is about the implementation and respective performance analysis of three different attetnion algorithms."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }

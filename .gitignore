@@ -170,5 +170,6 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-.dat
-.data
+# Generic data files
+*.dat
+*.data
