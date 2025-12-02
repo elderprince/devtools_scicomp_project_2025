@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 
 [project]
-name = "attentions"
+name = "transformer"
 version = "0.0.1"
 description = "This project is about the implementation and respective performance analysis of three different attetnion algorithms."
 readme = "README.md"
