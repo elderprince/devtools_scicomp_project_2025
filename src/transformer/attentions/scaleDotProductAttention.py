@@ -67,13 +67,15 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         else:
             attn_bias = attn_mask + attn_bias
 
-    # Compute the attention weights
+    # Compute the attention weights and the attention output
     # The attention weights are computed as the dot product of query and key, 
-    # scaled by the scale factor, and softmaxed to get the attention distribution
+    # scaled by the scale factor, and softmaxed to get the attention weights
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
     attn_weight += attn_bias
     attn_weight = torch.softmax(attn_weight, dim=-1)
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+    
+    # Compute the attention output as the weighted sum of value
     attn = attn_weight @ value
     
     return attn

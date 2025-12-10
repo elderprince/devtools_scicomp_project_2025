@@ -1,7 +1,7 @@
 import math
 import torch
 
-def get_attn_mask(sequence_length, stride, device=None) -> torch.Tensor:
+def get_attn_mask(sequence_length, stride, device=None, dtype=None) -> torch.Tensor:
     """
     Build a strided causal mask shaped (1, 1, sequence_length, sequence_length) on the given device.
     Keep position (query index, key index) if:
@@ -22,11 +22,12 @@ def get_attn_mask(sequence_length, stride, device=None) -> torch.Tensor:
     # Set default device to CPU if none provided
     if device is None:
         device = torch.device("cpu")
+        dtype = torch.long if dtype is None else dtype
 
     # Initialize two tensors respectively with the shape of (sequence_length, 1), and (1, sequence_length)
     # These tensors will be broadcasted to (sequence_length, sequence_length) for comparison
-    q_indices = torch.arange(sequence_length, device=device, dtype=torch.bool).view(sequence_length, 1)
-    k_indices = torch.arange(sequence_length, device=device, dtype=torch.bool).view(1, sequence_length)
+    q_indices = torch.arange(sequence_length, device=device, dtype=dtype).view(sequence_length, 1)
+    k_indices = torch.arange(sequence_length, device=device, dtype=dtype).view(1, sequence_length)
 
     # First condition: query index >= key index  (causal)
     # Generates a (sequence_length, sequence_length) boolean tensor for causal masking
@@ -96,6 +97,8 @@ def merge_heads(x) -> torch.Tensor:
 
 def strided_sparse_attention(queries, keys, values, n_heads, stride) -> torch.Tensor:
     """
+    Implement strided sparse attention using dense operations with masking.
+    
     Arg: 
         queries (torch.Tensor): Query Tensor of shape (batch, sequence_length, embedding_dim)
         keys (torch.Tensor): Key Tensor of shape (batch, sequence_length, embedding_dim)
@@ -108,7 +111,8 @@ def strided_sparse_attention(queries, keys, values, n_heads, stride) -> torch.Te
     
     NOTES:
       - This implementation masks logits for a strided causal pattern.
-      - It still computes full (sequence_length x sequence_length) logits (O(N^2)).
+      - It still computes full (sequence_length x sequence_length) logits with O(N^2) complexity.
+      - Used for the verification of more efficient sparse implementations.
     """
     # Get dimensions
     batch_size, sequence_length, embedding_dim = queries.shape
@@ -124,7 +128,7 @@ def strided_sparse_attention(queries, keys, values, n_heads, stride) -> torch.Te
     logits = torch.matmul(q, k.transpose(-2, -1)) * scale
 
     # Build and apply boolean masking tensor to mask sequences from the calculation of attention tensor
-    mask_bool = get_attn_mask(sequence_length, stride, device=queries.divece)
+    mask_bool = get_attn_mask(sequence_length, stride, device=queries.device)
     logits = logits.masked_fill_(mask_bool.logical_not(), float("-inf"))
 
     # Softmax of the masked logits to get attention weights
@@ -136,6 +140,139 @@ def strided_sparse_attention(queries, keys, values, n_heads, stride) -> torch.Te
     out = merge_heads(attn)
     
     return out
+
+def build_sparse_indices(sequence_length, stride, device=None):
+    """
+    Construct, for every query position, the list of indexes allowed by the strided-causal rule. 
+    Frankly, generate a rectangular tensor indexing the allowed tokens contributing to the attention calculation in each position. 
+
+    Args:
+        sequence_length (int): length of the sequence
+        stride (int): stride for strided sparse attention
+        device (torch.device, optional): device to create the tensors on; defaults to CPU if None
+
+    Output:
+        key_indices_per_query (torch.Tensor): LongTensor of shape (sequence_length, max_keys)
+        mask_per_query (torch.Tensor): BoolTensor of same shape (sequence_length, max_keys)
+        max_keys (int): maximum number of keys selected for any query position
+    
+    NOTES: 
+        - key_indices_per_query[q] gives the indices of keys allowed for the query position q.
+        - mask_per_query[q] indicates which entries in key_indices_per_query[q] are valid (not padding).
+        - Terminologies: "keys" refer to the sequence positions being attended to, "queries" refer to the positions attending. 
+          Both in this function differ from the input query/key tensors into the attention mechanism. 
+    """
+    # Set default device to CPU if none provided
+    if device is None:
+        device = torch.device("cpu")
+    
+    # Initialize list to hold allowed key indices for each query position
+    all_indices = []
+    max_len = 0
+
+    for q in range(sequence_length):
+        # Construct a 1D tensor holding keys satisfying causal constraint, i.e., k <= q
+        k = torch.arange(0, q+1)
+
+        # Apply stride rule to 1D tensor into a , i.e., (q-k) % stride == 0
+        cond = ((q - k) % stride) == 0
+
+        # Filter keys based on the causal and strided conditions
+        # Store the allowed key indices for the current query position
+        # Update the maximum length of allowed keys across all query positions
+        allowed = k[cond]
+        all_indices.append(allowed)
+        max_len = max(max_len, allowed.numel())
+
+    # Initialize tensors to hold key indices and masks, with the shape (sequence_length, max_len)
+    key_indices = torch.full((sequence_length, max_len), fill_value=0, dtype=torch.long)
+    mask = torch.full((sequence_length, max_len), fill_value=0, dtype=torch.bool)
+    
+    # For each query position, fill in the allowed key indices and set the corresponding mask entries to True
+    for q, k_allowed in enumerate(all_indices):
+        L = len(k_allowed)
+        key_indices[q, :L] = k_allowed
+        mask[q, :L] = True
+
+    return key_indices.to(device), mask.to(device), max_len
+
+
+def sliced_strided_sparse_attention(queries, keys, values, n_heads, stride):
+    """
+    Implement strided sparse attention using sliced tensor for efficent oeerations. 
+    
+    Arg: 
+        queries (torch.Tensor): Query Tensor of shape (batch, sequence_length, embedding_dim)
+        keys (torch.Tensor): Key Tensor of shape (batch, sequence_length, embedding_dim)
+        values (torch.Tensor): Value Tensor of shape (batch, sequence_length, embedding_dim)
+        n_heads (int): number of attention heads
+        stride (int): stride for strided sparse attention
+
+    Returns:
+        torch.Tensor: Attention output Tensor of shape (batch, sequence_length, embedding_dim)
+    """
+    # Assign device and get dimensions
+    device = queries.device
+    batch_size, sequence_length, embedding_dim = queries.shape
+    head_dim = embedding_dim // n_heads
+
+    # Split query, key, and value tensors into multiple heads
+    q = split_heads(queries, n_heads)
+    k = split_heads(keys, n_heads)
+    v = split_heads(values, n_heads)
+
+    # Construct tensors holding sparse indices and masks with the shape (sequence_length, max_keys)
+    key_index_map, key_mask, max_keys = build_sparse_indices(sequence_length, stride, device)
+
+    # Expand tensors of sparse indices and masks from 2D to 4D, with the shape (batch, heads, sequence_length, max_keys)
+    # This operation is the preparation for broadcasting both tensors in all batches and heads
+    key_indices = key_index_map.unsqueeze(0).unsqueeze(0).expand(batch_size, n_heads, sequence_length, max_keys)
+    key_mask = key_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, n_heads, sequence_length, max_keys)
+
+    # Gather selected keys and values according to sparse indices, so that tensors of allowed keys/values 
+    # have the shape (batch, heads, sequence_length, max_keys, head_dim), e.g., for each query position q in 
+    # each batch and head, selected_keys[batch, head, q, :] contains the keys/values allowed for atention calculation
+    selected_keys = torch.gather(
+        k.unsqueeze(3).expand(-1, -1, -1, max_keys, -1),
+        dim=2,
+        index=key_indices.unsqueeze(-1).expand(-1, -1, -1, -1, head_dim)
+        )
+    selected_values = torch.gather(
+        v.unsqueeze(3).expand(-1, -1, -1, max_keys, -1),
+        dim=2,
+        index=key_indices.unsqueeze(-1).expand(-1, -1, -1, -1, head_dim)
+        )
+    
+    # Extend query tensor for broadcasting in dot-product attention calculation
+    # The shape is expanded from (batch, heads, sequence_length, head_dim) to (batch, heads, sequence_length, 1, head_dim)
+    q_expanded = q.unsqueeze(3)
+
+    # Compute attention weights with only selected keys 
+    # Dot-product the query tensors with only selected key tensors
+    # Sum over the last dimension (head_dim) to get raw attention logits for each selected key
+    # Shape of logits: (batch, heads, sequence_length, max_keys)
+    logits = (q_expanded * selected_keys).sum(dim=-1)
+
+    # Apply scaling to the logits
+    logits = logits / math.sqrt(head_dim)
+
+    # Not all queries have the same number of allowed keys, so we mask out 
+    # the padding positions in the logits using the precomputed key mask
+    logits = logits.masked_fill_(key_mask.logical_not(), float("-inf"))
+
+    # Softmax of the masked logits to get attention weights
+    attn_weights = torch.softmax(logits, dim=-1)
+
+    # Compute attention output with the expanded attention weights and only selected values
+    # Sum over the max_keys dimension to ensure the attention output of each token in the sequence can be with the same embedding length with the input
+    # attn_weights: (batch, heads, sequence_length, max_keys, 1)
+    # selected_values: (batch, heads, sequence_length, max_keys, head_dim)
+    attn_output = (attn_weights.unsqueeze(-1) * selected_values).sum(dim=-2)
+
+    # Merge heads of the attention tensor to restore the original embedding dimension
+    attn_output = merge_heads(attn_output)
+
+    return attn_output
 
 # Example usage:
 if __name__ == "__main__":
@@ -150,3 +287,7 @@ if __name__ == "__main__":
 
     output = strided_sparse_attention(q, k, v, n_heads, stride=64)
     print(output.shape)  # Expected: (4, 1024, 256)
+
+    out_sparse = sliced_strided_sparse_attention(q, k, v, n_heads, stride=64)
+    out_dense = strided_sparse_attention(q, k, v, n_heads, stride=64)
+    print(torch.allclose(out_sparse, out_dense, atol=1e-5))  # Expected: True
