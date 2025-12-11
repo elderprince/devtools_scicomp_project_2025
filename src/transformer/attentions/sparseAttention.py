@@ -46,68 +46,18 @@ def get_attn_mask(sequence_length, stride, device=None, dtype=None) -> torch.Ten
 
     return mask
 
-def split_heads(x, n_heads) -> torch.Tensor:
-    """
-    Reshape (batch, sequence_length, embedding_dim) -> (batch, n_heads, sequence_length, head_dim)
-
-    Args:
-        x (torch.Tensor): Input Tensor of shape (batch, sequence_length, embedding_dim)
-        n_heads (int): number of attention heads
-    
-    Returns:
-        torch.Tensor: Reshaped Tensor of shape (batch, n_heads, sequence_length, head_dim)
-    """
-    # Get dimensions
-    batch_size, sequence_length, embedding_dim = x.size()
-    
-    # Validate the validity of n_heads
-    assert embedding_dim % n_heads == 0, "embedding_dim must be divisible by n_heads"
-    
-    # Calculate the number of embedding dimensions per head
-    # Reshape the input tensor to separate heads
-    head_dim = embedding_dim // n_heads
-    x_split = torch.reshape(x, [batch_size, sequence_length, n_heads, head_dim])
-
-    # Adjust dimensions to move heads to the second dimension
-    x_split = x_split.permute(0, 2, 1, 3).contiguous()
-
-    return x_split
-
-def merge_heads(x) -> torch.Tensor:
-    """
-    Reshape (batch, n_heads, sequence_length, head_dim) -> (batch, sequence_length, embedding_dim)
-
-    Args:
-        x (torch.Tensor): Input Tensor of shape (batch, sequence_length, n_heads, head_dim)
-    
-    Returns:
-        torch.Tensor: Reshaped Tensor of shape (batch, sequence_length, embedding_dim)
-    """
-    # Adjust dimensions to move heads back to last-two dims
-    # Get dimensions
-    x = x.permute(0, 2, 1, 3).contiguous()
-    batch_size, sequence_length, n_heads, head_dim = x.size()
-
-    # Calculate the original embedding dimension
-    # Reshape the input tensor to merge heads back into the original embedding dimension
-    embedding_dim = n_heads * head_dim
-    x_merged = torch.reshape(x, [batch_size, sequence_length, embedding_dim])
-
-    return x_merged
-
-def strided_sparse_attention(queries, keys, values, n_heads, stride) -> torch.Tensor:
+def strided_sparse_attention(queries, keys, values, stride) -> torch.Tensor:
     """
     Implement strided sparse attention using dense operations with masking.
     
     Arg: 
-        queries (torch.Tensor): Query Tensor of shape (batch, sequence_length, embedding_dim)
-        keys (torch.Tensor): Key Tensor of shape (batch, sequence_length, embedding_dim)
-        values (torch.Tensor): Value Tensor of shape (batch, sequence_length, embedding_dim)
-        n_heads(int): number of attention heads
+        queries (torch.Tensor): Query Tensor of shape (batch, n_heads, sequence_length, head_dim)
+        keys (torch.Tensor): Key Tensor of shape (batch, n_heads, sequence_length, head_dim)
+        values (torch.Tensor): Value Tensor of shape (batch, n_heads, sequence_length, head_dim)
         local_attn_ctx (int): stride for strided sparse attention
     
     Returns: 
-        torch.Tensor: Attention output Tensor of shape (batch, sequence_length, embedding_dim)
+        torch.Tensor: Attention output Tensor of shape (batch, n_heads, sequence_length, head_dim)
     
     NOTES:
       - This implementation masks logits for a strided causal pattern.
@@ -115,15 +65,9 @@ def strided_sparse_attention(queries, keys, values, n_heads, stride) -> torch.Te
       - Used for the verification of more efficient sparse implementations.
     """
     # Get dimensions
-    batch_size, sequence_length, embedding_dim = queries.shape
-
-    # Split query, key, and value tensors into multiple heads
-    q = split_heads(queries, n_heads)
-    k = split_heads(keys, n_heads)
-    v = split_heads(values, n_heads)
+    batch_size, num_heads, sequence_length, head_dim = queries.shape
 
     # Scaled dot-product of query and key tensors to get raw attention logits
-    head_dim = q.size(-1)
     scale = 1.0 / math.sqrt(head_dim)
     logits = torch.matmul(q, k.transpose(-2, -1)) * scale
 
@@ -135,11 +79,8 @@ def strided_sparse_attention(queries, keys, values, n_heads, stride) -> torch.Te
     # Compute attention output with the dot-product of attention weights and value tensor
     attn_weights = torch.softmax(logits, dim=-1)
     attn = torch.matmul(attn_weights, v)  # (batch, heads, sequence_length, head_dim)
-
-    # Merge heads of the attention tensor to restore the original embedding dimension
-    out = merge_heads(attn)
     
-    return out
+    return attn
 
 def build_sparse_indices(sequence_length, stride, device=None):
     """
@@ -197,15 +138,14 @@ def build_sparse_indices(sequence_length, stride, device=None):
     return key_indices.to(device), mask.to(device), max_len
 
 
-def sliced_strided_sparse_attention(queries, keys, values, n_heads, stride):
+def sliced_strided_sparse_attention(queries, keys, values, stride):
     """
     Implement strided sparse attention using sliced tensor for efficent oeerations. 
     
     Arg: 
-        queries (torch.Tensor): Query Tensor of shape (batch, sequence_length, embedding_dim)
-        keys (torch.Tensor): Key Tensor of shape (batch, sequence_length, embedding_dim)
-        values (torch.Tensor): Value Tensor of shape (batch, sequence_length, embedding_dim)
-        n_heads (int): number of attention heads
+        queries (torch.Tensor): Query Tensor of shape (batch, n_heads, sequence_length, head_dim)
+        keys (torch.Tensor): Key Tensor of shape (batch, n_heads, sequence_length, head_dim)
+        values (torch.Tensor): Value Tensor of shape (batch, n_heads, sequence_length, head_dim)
         stride (int): stride for strided sparse attention
 
     Returns:
@@ -213,21 +153,15 @@ def sliced_strided_sparse_attention(queries, keys, values, n_heads, stride):
     """
     # Assign device and get dimensions
     device = queries.device
-    batch_size, sequence_length, embedding_dim = queries.shape
-    head_dim = embedding_dim // n_heads
-
-    # Split query, key, and value tensors into multiple heads
-    q = split_heads(queries, n_heads)
-    k = split_heads(keys, n_heads)
-    v = split_heads(values, n_heads)
+    batch_size, num_heads, sequence_length, head_dim = queries.shape
 
     # Construct tensors holding sparse indices and masks with the shape (sequence_length, max_keys)
     key_index_map, key_mask, max_keys = build_sparse_indices(sequence_length, stride, device)
 
     # Expand tensors of sparse indices and masks from 2D to 4D, with the shape (batch, heads, sequence_length, max_keys)
     # This operation is the preparation for broadcasting both tensors in all batches and heads
-    key_indices = key_index_map.unsqueeze(0).unsqueeze(0).expand(batch_size, n_heads, sequence_length, max_keys)
-    key_mask = key_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, n_heads, sequence_length, max_keys)
+    key_indices = key_index_map.unsqueeze(0).unsqueeze(0).expand(batch_size, num_heads, sequence_length, max_keys)
+    key_mask = key_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, num_heads, sequence_length, max_keys)
 
     # Gather selected keys and values according to sparse indices, so that tensors of allowed keys/values 
     # have the shape (batch, heads, sequence_length, max_keys, head_dim), e.g., for each query position q in 
@@ -269,25 +203,22 @@ def sliced_strided_sparse_attention(queries, keys, values, n_heads, stride):
     # selected_values: (batch, heads, sequence_length, max_keys, head_dim)
     attn_output = (attn_weights.unsqueeze(-1) * selected_values).sum(dim=-2)
 
-    # Merge heads of the attention tensor to restore the original embedding dimension
-    attn_output = merge_heads(attn_output)
-
     return attn_output
 
 # Example usage:
 if __name__ == "__main__":
     n_batch = 4
+    n_heads = 4
     n_ctx = 1024
     n_embd = 256
-    n_heads = 4
 
-    q = torch.randn(n_batch, n_ctx, n_embd)
-    k = torch.randn(n_batch, n_ctx, n_embd)
-    v = torch.randn(n_batch, n_ctx, n_embd)
+    q = torch.randn(n_batch, n_heads, n_ctx, n_embd)
+    k = torch.randn(n_batch, n_heads, n_ctx, n_embd)
+    v = torch.randn(n_batch, n_heads, n_ctx, n_embd)
 
-    output = strided_sparse_attention(q, k, v, n_heads, stride=64)
-    print(output.shape)  # Expected: (4, 1024, 256)
+    output = strided_sparse_attention(q, k, v, stride=64)
+    print(output.shape)  # Expected: (4, 4, 1024, 256)
 
-    out_sparse = sliced_strided_sparse_attention(q, k, v, n_heads, stride=64)
-    out_dense = strided_sparse_attention(q, k, v, n_heads, stride=64)
+    out_sparse = sliced_strided_sparse_attention(q, k, v, stride=64)
+    out_dense = strided_sparse_attention(q, k, v, stride=64)
     print(torch.allclose(out_sparse, out_dense, atol=1e-5))  # Expected: True

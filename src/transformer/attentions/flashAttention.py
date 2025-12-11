@@ -1,15 +1,14 @@
 import math
 import torch
 
-def flash_attention(q, k, v, n_heads, block_size=128, is_causal=False):
+def flash_attention(q, k, v, block_size=128, is_causal=False):
     """
     Implement flash attention
     
     Args:
-        q (torch.Tensor): Query Tensor of shape (batch, sequence_length, embedding_dim).
-        k (torch.Tensor): Key Tensor of shape (batch, sequence_length, embedding_dim).
-        v (torch.Tensor): Value Tensor of shape (batch, sequence_length, embedding_dim).
-        n_heads (int): number of attention heads.
+        q (torch.Tensor): Query Tensor of shape (batch, n_heads, sequence_length, head_dim).
+        k (torch.Tensor): Key Tensor of shape (batch, n_heads, sequence_length, head_dim).
+        v (torch.Tensor): Value Tensor of shape (batch, n_heads, sequence_length, head_dim).
         blocksize (int): Size of blocks to process at a time.
         causal (bool): Whether to apply causal masking.
 
@@ -17,20 +16,9 @@ def flash_attention(q, k, v, n_heads, block_size=128, is_causal=False):
         torch.Tensor: Attention output Tensor of shape (batch, sequence_length, n_heads, head_dim).
     """
 
-    # Get dimensions and validate the validity of the number of heads
-    batch_size, sequence_length, embedding_dim = q.shape
-    assert embedding_dim % n_heads == 0, "embedding_dim must be divisible by n_heads"
-    head_dim = embedding_dim // n_heads
-
-    # Get device and dtype
+    # Get dimensions and device
+    batch_size, num_heads, sequence_length, head_dim = q.shape
     device = q.device
-    dtype = q.dtype
-
-    # Reshape q, k, v tensors into separate heads
-    # e.g., from (batch_size, sequence_length, embedding_dim) to (batch_size, sequence_length, n_heads, head_dim)
-    q = torch.reshape(q, [batch_size, sequence_length, n_heads, head_dim])
-    k = torch.reshape(k, [batch_size, sequence_length, n_heads, head_dim])
-    v = torch.reshape(v, [batch_size, sequence_length, n_heads, head_dim])
     
     # Initialize output tensor to hold attention outputs
     output = torch.zeros_like(q)
@@ -40,11 +28,11 @@ def flash_attention(q, k, v, n_heads, block_size=128, is_causal=False):
 
     # Process each batch/head block-wise
     for batch_index in range(batch_size):
-        for head_index in range(n_heads):
+        for head_index in range(num_heads):
             # Slice q, k, v tensors for the current batch and head
-            q_sliced = q[batch_index, :, head_index, :]
-            k_sliced = k[batch_index, :, head_index, :]
-            v_sliced = v[batch_index, :, head_index, :]
+            q_sliced = q[batch_index, head_index, :, :]
+            k_sliced = k[batch_index, head_index, :, :]
+            v_sliced = v[batch_index, head_index, :, :]
 
             # Initialize online softmax variables
             running_max = torch.full((sequence_length, ), float("-inf"), device=q.device)
@@ -97,23 +85,20 @@ def flash_attention(q, k, v, n_heads, block_size=128, is_causal=False):
                 running_accumulator = new_running_accumulator
 
             # After processing all blocks, compute the final output for one head in one batch
-            output[batch_index, :, head_index, :] = running_accumulator / running_denom.unsqueeze(-1)
-    
-    # Reshape output back to (batch_size, sequence_length, embedding_dim)
-    output = torch.reshape(output, [batch_size, sequence_length, embedding_dim])
+            output[batch_index, head_index, :, :] = running_accumulator / running_denom.unsqueeze(-1)
 
     return output
 
 # Example usage:
 if __name__ == "__main__":
     n_batch = 4
+    n_heads = 4
     n_ctx = 1024
     n_embd = 256
-    n_heads = 4
 
-    q = torch.randn(n_batch, n_ctx, n_embd)
-    k = torch.randn(n_batch, n_ctx, n_embd)
-    v = torch.randn(n_batch, n_ctx, n_embd)
+    q = torch.randn(n_batch, n_heads, n_ctx, n_embd)
+    k = torch.randn(n_batch, n_heads, n_ctx, n_embd)
+    v = torch.randn(n_batch, n_heads, n_ctx, n_embd)
 
-    output = flash_attention(q, k, v, n_heads, is_causal=True)
-    print(output.shape)  # Expected: (4, 1024, 256)
+    output = flash_attention(q, k, v)
+    print(output.shape)  # Expected: (4, 4, 1024, 256)

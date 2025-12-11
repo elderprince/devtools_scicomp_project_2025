@@ -83,12 +83,13 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
 # Example usage:
 if __name__ == "__main__":
     n_batch = 4
+    n_heads = 4
     n_ctx = 1024
     n_embd = 256
 
-    q = torch.randn(n_batch, n_ctx, n_embd)
-    k = torch.randn(n_batch, n_ctx, n_embd)
-    v = torch.randn(n_batch, n_ctx, n_embd)
+    q = torch.randn(n_batch, n_heads, n_ctx, n_embd)
+    k = torch.randn(n_batch, n_heads, n_ctx, n_embd)
+    v = torch.randn(n_batch, n_heads, n_ctx, n_embd)
 
     output = scaled_dot_product_attention(q, k, v)
-    print(output.shape) # Expected: (4, 1024, 256)
+    print(output.shape) # Expected: (4, 4, 1024, 256)
