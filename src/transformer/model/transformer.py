@@ -1,5 +1,8 @@
 import torch
 import torch.nn as nn
+import pytorch_lightning as pl
+
+from torch.nn import CrossEntropyLoss
 from transformer.attentions import scaleDotProductAttention, sparseAttention, flashAttention
 
 class BaseAttention(nn.Module):
@@ -64,7 +67,7 @@ class ModularMultiHeadAttention(nn.Module):
     Multi-head attention module that can utilize different attention mechanisms.
 
     Args:
-        embed_dim (int): The total embedding length.
+        embed_dim (int): Dimensionality of each token representation before splitting into heads.
         num_heads (int): Number of attention heads.
         attention_module (BaseAttention): An instance of a class derived from BaseAttention.
     """
@@ -152,3 +155,67 @@ class ModularMultiHeadAttention(nn.Module):
         out = self.merge_heads(out)
 
         return self.out_proj(out)
+
+class TransformerBlock(nn.Module):
+    """
+    Transformer block consisting of pluggable multi-head attention, MLP with residual connections, and layer normalization.
+
+    Args:
+        embed_dim (int): Dimensionality of each token representation.
+        num_heads (int): Number of attention heads.
+        attention_module (BaseAttention): An instance of a class derived from BaseAttention, e.g. FullAttention, StridedSparseAttention, or FlashAttention.
+        mlp_ratio (int): Ratio to determine the hidden dimension of the MLP relative to embed_dim.
+    """
+    def __init__(self, embed_dim, num_heads, attention_module, mlp_ratio=4):
+        super().__init__()
+
+        # Define normalization layer before attention
+        self.norm1 = nn.LayerNorm(embed_dim)
+
+        # Define the pluggable multi-head attention module
+        self.attn = ModularMultiHeadAttention(embed_dim, num_heads, attention_module)
+
+        # Define normalization layer before MLP
+        self.norm2 = nn.LayerNorm(embed_dim)
+
+        # Define the MLP module
+        hidden_dim = embed_dim * mlp_ratio
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, hidden_dim), 
+            nn.GELU(), 
+            nn.Linear(hidden_dim, embed_dim)
+        )
+        
+    def forward(self, x):
+        x = x + self.attn(self.norm1(x))
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+class LitTransformer(pl.LightningModule):
+    """
+    PyTorch Lightning module for training and evaluating a Transformer model.
+
+    Args:
+        model (nn.Module): The Transformer model to be trained and evaluated.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.loss_fn = CrossEntropyLoss()
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        logits = self.model(x)
+        loss = self.loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        logits = self.model(x)
+        loss = self.loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+        ppl = torch.exp(loss)
+        self.log('val_ppl', ppl, prog_bar=True)
+        return ppl
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=3e-4)

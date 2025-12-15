@@ -171,6 +171,7 @@ cython_debug/
 .pypirc
 
 # Generic data files
+data/
 *.dat
 *.data
 
