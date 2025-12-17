@@ -1,0 +1,28 @@
+model:
+  embed_dim: 256
+  num_heads: 4
+  vocab_size: 256
+  num_layers: 6
+  max_seq_len: 2048
+
+training:
+  epochs: 5
+  batch_size: 32
+  lr: 3e-4
+
+attention_variants:
+  full:
+    type: full
+    attn_mask: None
+    dropout_p: 0.0
+    is_causal: False
+    scale: None
+
+  strided:
+    type: strided
+    stride: 4
+
+  flash:
+    type: flash
+    block_size: 64
+    is_causal: true

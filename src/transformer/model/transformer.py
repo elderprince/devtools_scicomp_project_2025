@@ -1,8 +1,9 @@
+import math
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 
-from torch.nn import CrossEntropyLoss
+from transformer.attentions.attentionRegistry import register_attention, build_attention
 from transformer.attentions import scaleDotProductAttention, sparseAttention, flashAttention
 
 class BaseAttention(nn.Module):
@@ -16,9 +17,11 @@ class BaseAttention(nn.Module):
     def forward(self, q, k, v):
         raise NotImplementedError
 
+@register_attention("full")
 class FullAttention(BaseAttention):
     """
     Standard full attention class using scaled dot-product attention.
+    Implement the scaled dot-product attention function in transformer/attentions/scaleDotProductAttention.py
     """
     def __init__(self, attn_mask=None, 
                  dropout_p=0.0, is_causal=False, 
@@ -36,9 +39,11 @@ class FullAttention(BaseAttention):
                                                                      self.is_causal,
                                                                      self.scale)
 
+@register_attention("strided")
 class StridedSparseAttention(BaseAttention):
     """
     Strided sparse attention class.
+    Implement the sliced strided sparse attention function in transformer/attentions/sparseAttention.py
     """
     def __init__(self, stride=64):
         super().__init__()
@@ -48,9 +53,11 @@ class StridedSparseAttention(BaseAttention):
         return sparseAttention.sliced_strided_sparse_attention(q, k, v,
                                                                self.stride)
 
+@register_attention("flash")
 class FlashAttention(BaseAttention):
     """
     Flash attention class.
+    Implement the flash attention function in transformer/attentions/flashAttention.py
     """
     def __init__(self, block_size=64, is_causal=False):
         super().__init__()
@@ -67,11 +74,11 @@ class ModularMultiHeadAttention(nn.Module):
     Multi-head attention module that can utilize different attention mechanisms.
 
     Args:
-        embed_dim (int): Dimensionality of each token representation before splitting into heads.
+        embed_dim (int): Dimensionality of each token representation.
         num_heads (int): Number of attention heads.
-        attention_module (BaseAttention): An instance of a class derived from BaseAttention.
+        attention_config (dic): Configuration dictionary for the attention mechanism.
     """
-    def __init__(self, embed_dim, num_heads, attention_module):
+    def __init__(self, embed_dim, num_heads, attention_config):
         super().__init__()
         
         # Validate the validity of n_heads
@@ -82,8 +89,8 @@ class ModularMultiHeadAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
 
-        # Define the assigned attention module
-        self.attn = attention_module
+        # Define the assigned attention module from the registry
+        self.attn = build_attention(attention_config)
 
         # Define the projection layers for query, key, value, and output
         self.Wq = nn.Linear(embed_dim, embed_dim)
@@ -156,6 +163,45 @@ class ModularMultiHeadAttention(nn.Module):
 
         return self.out_proj(out)
 
+class SinusoidalPositionalEncoding(nn.Module):
+    """
+    Implement the same fixed sinusoidal positional encoding in the orifinal 
+    Transformer paper (Attention Is All You Need (Vaswani et al., 2017)). 
+
+    Based on the implementation from PyTorchLightning tutorial: 
+    https://lightning.ai/docs/pytorch/stable/notebooks/course_UvA-DL/05-transformers-and-MH-attention.html
+    
+    Args:
+        embed_dim (int): Dimensionality of each token representation.
+        max_seq_len (int): Maximum sequence length for positional encodings.
+    """
+
+    def __init__(self, embed_dim, max_seq_len=2048):
+        super().__init__()
+
+        # Create positional encoding matrix of shape (max_seq_len, embed_dim)
+        pe = torch.zeros(max_seq_len, embed_dim)
+        position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, embed_dim, 2, dtype=torch.float) * (-math.log(10000.0) / embed_dim))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        # Register_buffer => Tensor which is not a parameter, but should be part of the modules state.
+        # Used for tensors that need to be on the same device as the module.
+        # persistent=False tells PyTorch to not add the buffer to the state dict (e.g. when we save the model)
+        self.register_buffer("pe", pe, persistent=False)
+
+    def forward(self, seq_len, device):
+        """
+        Args:
+            seq_len (int): Length of the input sequence.
+            device (torch.device): Device to place the positional encodings on.
+
+        Returns:
+            Positional encodings of shape (1, seq_len, embed_dim)
+        """
+        return self.pe[ : seq_len].unsqueeze(0).to(device)
+
 class TransformerBlock(nn.Module):
     """
     Transformer block consisting of pluggable multi-head attention, MLP with residual connections, and layer normalization.
@@ -163,17 +209,17 @@ class TransformerBlock(nn.Module):
     Args:
         embed_dim (int): Dimensionality of each token representation.
         num_heads (int): Number of attention heads.
-        attention_module (BaseAttention): An instance of a class derived from BaseAttention, e.g. FullAttention, StridedSparseAttention, or FlashAttention.
+        attention_config (dic): Configuration dictionary for the attention mechanism.
         mlp_ratio (int): Ratio to determine the hidden dimension of the MLP relative to embed_dim.
     """
-    def __init__(self, embed_dim, num_heads, attention_module, mlp_ratio=4):
+    def __init__(self, embed_dim, num_heads, attention_config, mlp_ratio=4):
         super().__init__()
 
         # Define normalization layer before attention
         self.norm1 = nn.LayerNorm(embed_dim)
 
         # Define the pluggable multi-head attention module
-        self.attn = ModularMultiHeadAttention(embed_dim, num_heads, attention_module)
+        self.attn = ModularMultiHeadAttention(embed_dim, num_heads, attention_config)
 
         # Define normalization layer before MLP
         self.norm2 = nn.LayerNorm(embed_dim)
@@ -182,40 +228,73 @@ class TransformerBlock(nn.Module):
         hidden_dim = embed_dim * mlp_ratio
         self.mlp = nn.Sequential(
             nn.Linear(embed_dim, hidden_dim), 
-            nn.GELU(), 
+            nn.ReLU(), 
             nn.Linear(hidden_dim, embed_dim)
         )
         
     def forward(self, x):
-        x = x + self.attn(self.norm1(x))
-        x = x + self.mlp(self.norm2(x))
+        x = self.norm1(x + self.attn(x))
+        x = self.norm2(x + self.mlp(x))
         return x
-
-class LitTransformer(pl.LightningModule):
+    
+class SmallTransformerLM(pl.LightningModule):
     """
-    PyTorch Lightning module for training and evaluating a Transformer model.
-
+    PyTorch Lightning module for training and evaluating a small Transformer-based language model.
+    
     Args:
-        model (nn.Module): The Transformer model to be trained and evaluated.
+        attention_config (dic): Configuration dictionary for the attention mechanism.
+        max_seq_len (int): Maximum sequence length for positional encodings.
+        vocab_size (int): Size of the vocabulary.
+        embed_dim (int): Dimensionality of the token embeddings.
+        num_heads (int): Number of attention heads.
+        num_layers (int): Number of Transformer blocks.
+        lr (float): Learning rate for the optimizer.
     """
-    def __init__(self, model):
+    def __init__(self, attention_config, max_seq_len=2048, vocab_size=256, embed_dim=128, num_heads=4, num_layers=2, lr=1e-3):
         super().__init__()
-        self.model = model
-        self.loss_fn = CrossEntropyLoss()
+
+        self.save_hyperparameters()
+
+        self.vocab_size = vocab_size
+        self.token_emb = nn.Embedding(vocab_size, embed_dim)
+        self.pos_enc = SinusoidalPositionalEncoding(embed_dim, max_seq_len)
+        self.blocks = nn.ModuleList([
+            TransformerBlock(embed_dim, num_heads, attention_config)
+            for i in range(num_layers)
+        ])
+        self.head = nn.Linear(embed_dim, vocab_size)
+
+        self.lr = lr
+        self.criterion = nn.CrossEntropyLoss()
+
+    def forward(self, idx):
+        # Get dimensions of the token index tensor of the input batch
+        batch_size, seq_len = idx.shape
+        # Embedding tokens with the shape of (batch_size, seq_len, embed_dim)
+        tok = self.token_emb(idx)
+        # Adding positional encodings to the token embeddings
+        pos = self.pos_enc(seq_len, idx.device)
+        x = tok + pos
+
+        # Passing through the Transformer blocks sequentially for the final logits 
+        # The shape of final logits is (batch_size, seq_len, vocab_size)
+        for b in self.blocks:
+            x = b(x)
+        logits = self.head(x)
+        return logits
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        logits = self.model(x)
-        loss = self.loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
+        logits = self(x)
+        loss = self.criterion(logits.view(-1, self.vocab_size), y.view(-1))
+        self.log("train/loss", loss, prog_bar=False, on_step=True, on_epoch=False)
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        logits = self.model(x)
-        loss = self.loss_fn(logits.view(-1, logits.size(-1)), y.view(-1))
-        ppl = torch.exp(loss)
-        self.log('val_ppl', ppl, prog_bar=True)
-        return ppl
+        logits = self(x)
+        loss = self.criterion(logits.view(-1, self.vocab_size), y.view(-1))
+        self.log("val/loss", loss, prog_bar=True, on_epoch=True)
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=3e-4)
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
