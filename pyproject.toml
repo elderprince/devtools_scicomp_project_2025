@@ -1,3 +1,4 @@
+[build-system]
 # Choosing a build backend:
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"

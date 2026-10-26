@@ -13,14 +13,16 @@ training:
 attention_variants:
   full:
     type: full
-    attn_mask: None
+    attn_mask: null
     dropout_p: 0.0
-    is_causal: False
-    scale: None
+    is_causal: true
+    scale: null
 
   strided:
     type: strided
-    stride: 4
+    stride: 46
+    local_window: 46
+    query_block_size: 64
 
   flash:
     type: flash

@@ -46,17 +46,17 @@ def get_attn_mask(sequence_length, stride, device=None, dtype=None) -> torch.Ten
 
     return mask
 
-def strided_sparse_attention(queries, keys, values, stride) -> torch.Tensor:
+def strided_sparse_attention(q, k, v, stride) -> torch.Tensor:
     """
     Implement strided sparse attention using dense operations with masking.
     
     Arg: 
-        queries (torch.Tensor): Query Tensor of shape (batch, n_heads, sequence_length, head_dim)
-        keys (torch.Tensor): Key Tensor of shape (batch, n_heads, sequence_length, head_dim)
-        values (torch.Tensor): Value Tensor of shape (batch, n_heads, sequence_length, head_dim)
-        local_attn_ctx (int): stride for strided sparse attention
-    
-    Returns: 
+        q (torch.Tensor): Query Tensor of shape (batch, n_heads, sequence_length, head_dim)
+        k (torch.Tensor): Key Tensor of shape (batch, n_heads, sequence_length, head_dim)
+        v (torch.Tensor): Value Tensor of shape (batch, n_heads, sequence_length, head_dim)
+        stride (int): stride for strided sparse attention
+
+    Returns:
         torch.Tensor: Attention output Tensor of shape (batch, n_heads, sequence_length, head_dim)
     
     NOTES:
@@ -65,14 +65,14 @@ def strided_sparse_attention(queries, keys, values, stride) -> torch.Tensor:
       - Used for the verification of more efficient sparse implementations.
     """
     # Get dimensions
-    batch_size, num_heads, sequence_length, head_dim = queries.shape
+    batch_size, num_heads, sequence_length, head_dim = q.shape
 
     # Scaled dot-product of query and key tensors to get raw attention logits
     scale = 1.0 / math.sqrt(head_dim)
     logits = torch.matmul(q, k.transpose(-2, -1)) * scale
 
     # Build and apply boolean masking tensor to mask sequences from the calculation of attention tensor
-    mask_bool = get_attn_mask(sequence_length, stride, device=queries.device)
+    mask_bool = get_attn_mask(sequence_length, stride, device=q.device)
     logits = logits.masked_fill_(mask_bool.logical_not(), float("-inf"))
 
     # Softmax of the masked logits to get attention weights
