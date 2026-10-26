@@ -6,7 +6,7 @@ all attention mechanisms can simply instantiate attention modules from the confi
 """
 
 from typing import Dict, Type
-from transformer.model import BaseAttention
+from transformer.attentions.baseAttention import BaseAttention
 import inspect
 
 _ATTENTION_REGISTRY: Dict[str, Type[BaseAttention]] = {}
