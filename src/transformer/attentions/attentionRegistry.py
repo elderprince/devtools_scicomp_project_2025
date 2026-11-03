@@ -1,7 +1,7 @@
 """
 Attention Registry
 
-With different constructor signatures (e.g. full, strided, flash), this centralized registry for 
+With different constructor signatures (e.g. full, strided, flash, pytorch_full, pytorch_flash), this centralized registry for 
 all attention mechanisms can simply instantiate attention modules from the configuration.
 """
 
@@ -35,7 +35,7 @@ def build_attention(cfg: Dict) -> Type[BaseAttention]:
     Args:
         cfg (dict): Must contain at least:
             {
-                "type": "flash" | "full" | "strided" | ...
+                "type": "flash" | "full" | "strided" | "pytorch_full" | "pytorch_flash"
                 ... attention-specific parameters ...
             }
 
